@@ -4,7 +4,7 @@ module sqrt_top (
     input start,
     input [15:0] x_in,
 
-    output busy,
+    output busy, 
     output done,
     output [8:0] sqrt_out
 );
