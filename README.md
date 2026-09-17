@@ -1,6 +1,6 @@
-# rsr-sqrt：基于倒平方根 Newton-Raphson 的定点平方根 RTL
+# rsr-sqrt：基于倒数平方根 Newton-Raphson 的定点平方根 RTL
 
-本项目实现无符号定点平方根：输入 `x_in` 为 UQ0.16，输出 `sqrt_out` 为 UQ1.8。核心思路不是直接迭代求 $\sqrt{x}$，而是先用 Newton-Raphson 求 $1/\sqrt{m}$，再计算 $m\cdot(1/\sqrt{m})$。
+本项目实现无符号定点平方根：输入 `x_in` 为 UQ0.16，输出 `sqrt_out` 为 UQ1.8。核心思路不是直接迭代求 `sqrt(x)`，而是先用 Newton-Raphson 求 `1 / sqrt(m)`，再计算 `m * (1 / sqrt(m))`。
 
 RTL 使用纯 Verilog-2001；测试平台使用 SystemVerilog，并可由 ModelSim 完整验证全部 65536 个输入码。
 
@@ -8,30 +8,27 @@ RTL 使用纯 Verilog-2001；测试平台使用 SystemVerilog，并可由 ModelS
 
 `UQ I.F` 表示无符号定点数：`I` 为整数位数、`F` 为小数位数，总宽度为 `I+F`。一个整数码 `C` 的实际数值为：
 
-$$
-\mathrm{value}=C/2^F
-$$
+```text
+value = C / 2^F
+```
 
 | 信号或数据 | 位宽 | 格式 | 含义 |
 |---|---:|---|---|
-| `x_in` | 16 | UQ0.16 | 输入 $x=X/2^{16}$，范围为 $[0,1)$ |
+| `x_in` | 16 | UQ0.16 | 输入 `x = X / 2^16`，范围为 `[0, 1)` |
 | `norm_m` | 16 | UQ0.16 | 归一化得到的中间尾数 |
 | `m_reg` | 20 | UQ2.18 | Newton 关键通路中的尾数 |
-| LUT seed | 6 | UQ2.4 | 初始倒平方根近似值 |
+| LUT seed | 6 | UQ2.4 | 初始倒数平方根近似值 |
 | `r_reg`、`t1_reg`、`t2_reg`、`t3_reg` | 20 | UQ2.18 | Newton 迭代寄存器 |
 | `mul_p` | 40 | UQ4.36 | 共享乘法器的完整乘积 |
-| `final_product` | 36 | UQ2.34 | $\sqrt{m}$ 的最终高精度结果 |
+| `final_product` | 36 | UQ2.34 | `sqrt(m)` 的最终高精度结果 |
 | `sqrt_out` | 9 | UQ1.8 | 最终平方根输出 |
 
-因为 $x=X/2^{16}$，所以输出码的数学参考值可写为：
+因为 `x = X / 2^16`，所以输出码的数学参考值可写为：
 
-$$
-\mathrm{sqrt\_out}_{\mathrm{ref}}
-=
-\operatorname{round}_{\text{half-up}}(\sqrt{x}\cdot2^8)
-=
-\operatorname{round}_{\text{half-up}}(\sqrt{X})
-$$
+```text
+sqrt_out_ref = round_half_up(sqrt(x) * 2^8)
+             = round_half_up(sqrt(X))
+```
 
 ## 顶层接口
 
@@ -55,21 +52,17 @@ $$
 
 对于非零输入，组合逻辑寻找最高的非零二进制位对，并构造：
 
-$$
-x=m\cdot2^{-2e}
-$$
-
-其中：
-
-$$
-m\in[0.25,1),\qquad e\in[0,7]
-$$
+```text
+x = m * 2^(-2e)
+m in [0.25, 1)
+e in [0, 7]
+```
 
 只使用偶数位左移：`0, 2, 4, ..., 14`。这样平方根的指数恢复为：
 
-$$
-\sqrt{x}=\sqrt{m}\cdot2^{-e}
-$$
+```text
+sqrt(x) = sqrt(m) * 2^(-e)
+```
 
 归一化初值 `norm_m` 是 UQ0.16；写入关键通路寄存器时转换为 UQ2.18：
 
@@ -81,11 +74,11 @@ m_reg <= {2'b00, norm_m, 2'b00};
 
 ### 2. 24 项 midpoint seed LUT
 
-归一化后的 $m$ 被分为 24 个等宽区间：
+归一化后的 `m` 被分为 24 个等宽区间：
 
-$$
-[0.25,0.28125),\ [0.28125,0.3125),\ \ldots,\ [0.96875,1)
-$$
+```text
+[0.25, 0.28125), [0.28125, 0.3125), ..., [0.96875, 1)
+```
 
 地址由：
 
@@ -95,14 +88,9 @@ seed_addr = m_reg[17:13] - 5'd8;
 
 得到，范围为 `0...23`。每一项按该区间中点生成：
 
-$$
-\mathrm{seed}[k]
-=
-\operatorname{round}_{\text{half-up}}
-\left(
-\frac{2^4}{\sqrt{(k+8.5)/32}}
-\right)
-$$
+```text
+seed[k] = round_half_up(2^4 / sqrt((k + 8.5) / 32))
+```
 
 LUT 输出为 6-bit UQ2.4，并通过左移 14 位变为 UQ2.18：
 
@@ -112,40 +100,36 @@ seed_q218 = {seed_value, 14'b00000000000000};
 
 总 LUT 存储量为：
 
-$$
-24\times6=144\text{ bit}
-$$
+```text
+24 * 6 = 144 bit
+```
 
-### 3. 两轮倒平方根 Newton-Raphson
+### 3. 两轮倒数平方根 Newton-Raphson
 
 迭代公式为：
 
-$$
-r_{n+1}
-=
-\frac{r_n}{2}\left(3-mr_n^2\right)
-$$
+```text
+r[n+1] = r[n] / 2 * (3 - m * r[n]^2)
+```
 
-其中 $r\approx1/\sqrt{m}$。项目固定执行两轮迭代。
+其中 `r` 近似于 `1 / sqrt(m)`。项目固定执行两轮迭代。
 
 共享乘法器的两个输入在每个有效状态下均为 UQ2.18，因此：
 
-$$
-\mathrm{UQ2.18}\times\mathrm{UQ2.18}
-=
-\mathrm{UQ4.36}
-$$
+```text
+UQ2.18 * UQ2.18 = UQ4.36
+```
 
 一轮 Newton 的数据路径如下：
 
 | 步骤 | 运算 | 乘法器结果 | 写回 UQ2.18 的方式 |
 |---|---|---|---|
-| 1 | $r^2$ | UQ4.36 | `mul_p[37:18]` |
-| 2 | $m\cdot r^2$ | UQ4.36 | `mul_p[37:18]` |
-| 3 | $3-mr^2$ | UQ2.18 | 直接减法，`3=20'd786432` |
-| 4 | $r(3-mr^2)/2$ | UQ4.36 | `mul_p[38:19]` |
+| 1 | `r^2` | UQ4.36 | `mul_p[37:18]` |
+| 2 | `m * r^2` | UQ4.36 | `mul_p[37:18]` |
+| 3 | `3 - m * r^2` | UQ2.18 | 直接减法，`3=20'd786432` |
+| 4 | `r * (3 - m * r^2) / 2` | UQ4.36 | `mul_p[38:19]` |
 
-步骤 1、2 的 `[37:18]` 完成 UQ4.36 到 UQ2.18 的截断。步骤 4 比普通 UQ4.36 → UQ2.18 多右移一位，以实现公式中的 `/2`。
+步骤 1、2 的 `[37:18]` 完成 UQ4.36 到 UQ2.18 的截断。步骤 4 比普通 UQ4.36 到 UQ2.18 多右移一位，以实现公式中的 `/2`。
 
 `sqrt_core` 的 FSM 顺序为：
 
@@ -163,11 +147,11 @@ IDLE
 
 两轮完成后：
 
-$$
-\sqrt{m}\approx m\cdot r_2
-$$
+```text
+sqrt(m) ~= m * r2
+```
 
-此时乘法器输出仍是 UQ4.36。归一化范围内 $m\cdot r\approx\sqrt{m}<2$，因此 `mul_p[39:38]` 对应的 8 和 4 整数位恒为 0；同时 `m_reg` 来自 UQ0.16 左移两位，其最低两位恒为 0，因此完整乘积最低两位也恒为 0。RTL 通过：
+此时乘法器输出仍是 UQ4.36。归一化范围内 `m * r ~= sqrt(m) < 2`，因此 `mul_p[39:38]` 对应的 8 和 4 整数位恒为 0；同时 `m_reg` 来自 UQ0.16 左移两位，其最低两位恒为 0，因此完整乘积最低两位也恒为 0。RTL 通过：
 
 ```verilog
 final_product <= mul_p[37:2];
@@ -217,7 +201,7 @@ matlab -batch "run('matlab/sqrt_fixed_verify.m')"
 
 1. 生成并打印 24 项 UQ2.4 midpoint seed；
 2. 按 RTL 相同的 UQ2.18 数据路径、位段截断、指数恢复和 round-half-up 逐项计算；
-3. 穷举全部 65536 个输入，并与 $\operatorname{round}_{\text{half-up}}(\sqrt{X})$ 比较。
+3. 穷举全部 65536 个输入，并与 `round_half_up(sqrt(X))` 比较。
 
 ### 独立参考 TXT 生成
 
@@ -225,7 +209,7 @@ matlab -batch "run('matlab/sqrt_fixed_verify.m')"
 matlab -batch "run('matlab/generate_expected_results.m')"
 ```
 
-该脚本使用整数二分求 $\lfloor\sqrt{X}\rfloor$ 和整数阈值比较完成普通四舍五入；不调用 RTL，也不使用定点 Newton 模型的输出作为期望值。
+该脚本使用整数二分求 `floor(sqrt(X))` 和整数阈值比较完成普通四舍五入；不调用 RTL，也不使用定点 Newton 模型的输出作为期望值。
 
 ### ModelSim RTL 全量验证
 
